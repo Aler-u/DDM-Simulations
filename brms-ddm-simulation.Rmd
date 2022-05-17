@@ -1,0 +1,12 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Este markdown esta hecho para seguir el proceso de armado de prior predictive checks para una implementacion bayesiana de un modelo de difusion. 
+
+
+```{r}
+
+```
+
