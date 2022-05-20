@@ -3,10 +3,498 @@ title: "R Notebook"
 output: html_notebook
 ---
 
-Este markdown esta hecho para seguir el proceso de armado de prior predictive checks para una implementacion bayesiana de un modelo de difusion. 
+```{r}
+library(brms)
+library(rtdists)
+library(bayesplot)
+library(RWiener)
+library(rtdists)
+```
 
+
+This markdown is intended to trace the steps to perform a prior predictive check when applying a drift-diffusion model to the analysis of reaction time data for two-alternative forced choice (2AFC) tasks.
+
+The motivation comes from a series of [articles](http://singmann.org/wiener-model-analysis-with-brms-part-i/) by Henrik Singmann on how to estimate the appropiate parameters of a drift-diffusion model using experimental data from research by Wagenmakers [1] employing the brms framework for bayesian data analysis in R. 
+
+However, none of the articles performs a prior predictive check or explains how to perform it within the brms framework. Thus what we intend to do here is to perform a prior predictive check for a simple drift-diffusion model trying out various alternatives including but not limited to the brms library. 
+
+
+# Importance of the prior predictive checking step within bayesian daya analysis
 
 ```{r}
 
 ```
 
+
+# Prior predictive checking within the brms library
+
+The brm function from the brms library has an argument with the name of `sample_prior` with the following description given by the [brms documentation](https://cran.r-project.org/web/packages/brms/index.html) 
+
+> Indicate if draws from priors should be drawn additionally to the posterior draws. Options are "no" (the default), "yes", and "only". Among others, these draws can be used to calculate Bayes factors for point hypotheses via hypothesis. Please note that improper priors are not sampled, including the default improper priors used by brm. See set_prior on how to set (proper) priors. Please also note that prior draws for the overall intercept are not obtained by default for technical reasons. See brmsformula how to obtain prior draws for the intercept. If sample_prior is set to "only", draws are drawn solely from the priors ignoring the likelihood, which allows among others to generate draws from the prior predictive distribution. In this case, all parameters must have proper priors.
+
+Thus it may seem that setting `sample_prior = 'only'` is the way to go to perform prior samplings in the context of a prior predictive check as the documentation specifies 
+
+```
+If sample_prior is set to "only", draws are drawn solely from the priors ignor-
+ing the likelihood, which allows among others to generate draws from the prior
+predictive distribution. In this case, all parameters must have proper priors.
+```
+
+Although our interest does not lie in using the same model as the one used by Henrik Singmann, we replicate his procedure modifying only the last step in the `brm` function call specifying `sample_prior = 'only'` to perform a prior sampling process. 
+
+We begin then by replicating the procedure of Singmann
+
+## Data loading
+
+We use the same code to load the data coming from the `rtdists` package only exlcuding the call to `str(spee_acc)` to avoid verbose outputs and cluttering of the document.
+
+```{r}
+data(speed_acc, package = "rtdists")
+speed_acc <- droplevels(speed_acc[!speed_acc$censor,]) # remove extreme RTs
+speed_acc <- droplevels(speed_acc[ speed_acc$frequency %in% 
+                                     c("high", "nw_high"),])
+speed_acc$response2 <- as.numeric(speed_acc$response)-1
+```
+
+## Model Formula
+
+We replicate the exact same formula wich details can be read in the corresponding article.
+
+```{r}
+formula <- bf(rt | dec(response2) ~ 0 + condition:frequency + 
+                (0 + condition:frequency|p|id), 
+               bs ~ 0 + condition + (0 + condition|p|id), 
+               ndt ~ 0 + condition + (0 + condition|p|id),
+               bias ~ 0 + condition + (0 + condition|p|id))
+```
+
+## Priors
+
+First we run the `get_prior` formula for which we are only interested in the output
+
+```{r}
+get_prior(formula,
+          data = speed_acc, 
+          family = wiener(link_bs = "identity", 
+                          link_ndt = "identity", 
+                          link_bias = "identity"))
+```
+As he does we then define a vector of priors to use in the model
+
+```{r}
+prior <- c(
+ prior("cauchy(0, 5)", class = "b"),
+ set_prior("normal(1.5, 1)", class = "b", dpar = "bs"),
+ set_prior("normal(0.2, 0.1)", class = "b", dpar = "ndt"),
+ set_prior("normal(0.5, 0.2)", class = "b", dpar = "bias")
+)
+```
+
+
+## Prior predictive checks
+
+We exlcuded the inital values argument since we are not trying to estimate the posterior distribution, for now we don't care about that. We run the `brm` function with the same parameters as the Singmann article but we add the `sample_prior = 'only'` argument to the function in order to produce a prior sampling process. For now we ignore the convergence of the chains and focus on the `pp_check` function.
+
+```{r}
+prior_pred <- brm(formula, 
+    data = speed_acc,
+    family = wiener(link_bs = "identity", 
+                    link_ndt = "identity",
+                    link_bias = "identity"),
+    prior = prior,
+    iter = 1000, warmup = 500, 
+    chains = 4, cores = 4, 
+    control = list(max_treedepth = 15),
+    sample_prior = 'only')
+```
+The outputs from the function are expected to be passed onto the `pp_check` function. As indicated from the brms documentation what the `pp_check` function does is
+
+ > Perform posterior predictive checks with the help of the bayesplot package.) 
+ 
+Therefore we examine [the bayesplot documentation for the `PPC` functions](https://mc-stan.org/bayesplot/reference/PPC-overview.html) which says 
+
+> The bayesplot PPC module provides various plotting functions for creating graphical displays comparing observed data to simulated data from the posterior (or prior) predictive distribution.
+
+In the definition of the PCC module we see a mention of the prior predictive distribution. This same function (`pp_check`) thus serves both for checking prior predictive distributions or posterior predictive distributions depending only on the parameters passed onto the `brm` function. Since we defined `sample_prior = 'only'` the output from the `brm` function constitutes prior distributions only. 
+
+At last we call the `pp_check` function. 
+
+```{r}
+pp_check(prior_pred, type = "stat", stat = "mean")
+```
+
+It returns an error with the `rwiener` function from the `brms` package which uses the `RWiener` package as a backend. The error may very well be because the chains didn't get adequately converge or it could be some other reason. Before trying to run the `rwiener` function directly we will try to generate another prior predictive simulation using the initial values from the code in the Singmann article and we'll also try to perform posterior predictive checks with the `pp_check` function, replacing our slightly modified code with the one from the Singmann article. 
+
+## Prior predictive checks (with initial values)
+
+First we supply the initial values following the Singmanng code.
+
+```{r}
+tmp_dat <- make_standata(formula, 
+                         family = wiener(link_bs = "identity", 
+                              link_ndt = "identity",
+                              link_bias = "identity"),
+                            data = speed_acc, prior = prior)
+initfun <- function() {
+  list(
+    b = rnorm(tmp_dat$K),
+    b_bs = runif(tmp_dat$K_bs, 1, 2),
+    b_ndt = runif(tmp_dat$K_ndt, 0.1, 0.15),
+    b_bias = rnorm(tmp_dat$K_bias, 0.5, 0.1),
+    sd_1 = runif(tmp_dat$M_1, 0.5, 1),
+    z_1 = matrix(rnorm(tmp_dat$M_1*tmp_dat$N_1, 0, 0.01),
+                 tmp_dat$M_1, tmp_dat$N_1),
+    L_1 = diag(tmp_dat$M_1)
+  )
+}
+```
+
+
+We then pass that function to the `brm` function. 
+
+```{r}
+fit_wiener <- brm(formula, 
+                  data = speed_acc,
+                  family = wiener(link_bs = "identity", 
+                                  link_ndt = "identity",
+                                  link_bias = "identity"),
+                  prior = prior, inits = initfun,
+                  iter = 1000, warmup = 500, 
+                  chains = 4, cores = 4, 
+                  control = list(max_treedepth = 15),
+                  sample_prior = 'only')
+```
+Again we get warnings about the sampling process but for now we ignore those to try again to run a prior predictive check. 
+
+```{r}
+pp_check(fit_wiener, type = "stat", stat = "mean")
+```
+
+Yet again we get an error from the `rwiener` function. 
+
+## Posterior predictive check
+
+Now we don't need to define again the initial values for the `brm` function, we only remove the `sample_prior` argument from the call leaving everything else as in the Singmann code.
+
+```{r}
+post_pred <- brm(formula, 
+                  data = speed_acc,
+                  family = wiener(link_bs = "identity", 
+                                  link_ndt = "identity",
+                                  link_bias = "identity"),
+                  prior = prior, inits = initfun,
+                  iter = 1000, warmup = 500, 
+                  chains = 4, cores = 4, 
+                  control = list(max_treedepth = 15))
+```
+
+
+Finally we try one last time to run the `pp_check` function.
+
+```{r}
+pp_check(post_pred, type = 'stat', stat = 'mean')
+```
+
+
+## Caveats of doing prior predictive checks in brms
+
+There are some downsides to doing the prior predictive checks within the brms framework. First of all the brm function call must have a data argument. At first this may seem odd since the prior sampling process doesn't need any data but Bruno Nicenboim, Daniel Schad, and Shravan Vasishth explain the reasoning behind this in section _3.5.3_ of their book *An Introduction to Bayesian Data Analysis for Cognitive Science*. 
+
+> If we want to use brms to generate prior predictive data in this manner before collecting the data, we do need to have some simulated values that represent the vector of dependent variables, rt. Because these values will be plotted alongside with the prior predictive distributions in pp_check, they can be used to compare the prior predictive data with the simulated rt vector.
+
+Since the results can be passed to the `pp_check` function the values passed onto the data argument are used to be compared against the simulated values either from a posterior predictive check or a prior predictive check. In either case the `brm` function needs some data which adds trouble if we are performing the prior predictive checks before getting any data because we need to, at least, simulate some values for the dependent variable. 
+
+For example Nicenboim & cols. use a uniform distribution to simulate reaction times to pass to the `brm` function so it's not a huge amount of work but its nevertheless bothersome. 
+
+Furthermore, as we saw in the case of prior predictive checks with and without initial values, the sampling process may not adequately converge. Nicenboim & cols. also adress these issue in section _3.2_ of their book
+
+> However, since brms still depends on Stan’s sampler, which uses Hamiltonian Monte Carlo, the prior sampling process can also fail to converge, especially when one uses very uninformative priors, like the ones used in this example. In contrast, our function above, which uses rnorm, cannot have convergence issues and will always produce multiple sets of prior predictive data
+
+The `brm` function uses the Hamiltonian Monte Carlo sampling process even for the prior samples so we need to take care of checking the adequate performance of the sampling process and running diagnostics. We need not only to run diagnostics for the sampling process of the posterior but also of the priors if we employ brms to perform the prior predictive checks. 
+
+In this brief passage of the book, Nicenboim & cols. also mention the alternative approach that does not depend on brms and that we'll describe next.   
+
+
+# Prior predictive cheking using custom functions
+
+In early 2020, Monica Alexander wrote [an article](https://www.monicaalexander.com/posts/2020-28-02-bayes_viz/) to illustrate a typical bayesian workflow in R. She uses brms to analyze data from a publicly available dataset of all births in the United States in 2017. As a first step, after performing some exploratory data analysis, she does some prior predictive checks. 
+
+To perform the prior sampling she uses custom code taking advantage of the R functions for generating random samples from a known distribution such as the `rnorm` function, employing the same distributions and parameters defined as priors. For example she generates a prior predictive check with two prior for $\beta_1$, the first one extremely uniformative defined as $\beta_1 \sim \mathcal{N}(0,100)$ and the second one more informative thus having less variance and defined as $\beta_1 \sim \mathcal{N}(0,1)$. Since the $\beta_1$ parameter is defined by a normal distribution she uses the `rnorm` function within her code to perform the prior sampling. 
+
+In a similar vein, Nicenboim & cols. in section _3.2_ of their book define a linear model of reaction times as 
+
+$rt_n \sim Normal(\mu,\sigma)$
+
+For this linear model they define two priors as
+
+$\mu \sim Uniform(0,60000)$
+
+$\sigma \sim Uniform(0, 2000)$
+
+Afterwards, they create a custom function to perform 1000 samples of the prior predictive distribution of the linear model using those priors. In this section they clearly mention that such an approach does not have convergence issues and will work independently of the number of iterations or how uninformative are the priors.
+
+In our context we could see by virtue of the error when trying to use the `pp_check` function that internally it is using the backend from the `RWiener` package. Thus to perform a prior predictive check in the context of a drift-diffusion model we could directly use the `rwiener` function from the `RWiener` package which serves our purpose acording to the documentation of the package
+
+> rwiener generates random quantiles from a wiener process distribution, based on the rejection based method.
+
+## Prior predictive check using rwiener
+
+### RWiener version
+
+For this simulation we will use the same priors as the model defined by Singmann.
+
+> For the drift rate we use a Cauchy distribution with location 0 and scale 5 so that roughly 70% of prior mass are between -10 and 10. For the boundary separation we use a normal prior with mean 1.5 and standard deviation of 1, for the non-decision time a normal prior with mean 0.2 and standard deviation of 0.1, and for the bias we use a normal with mean of 0.5 (i.e., no-bias) and standard deviation of 0.2.
+
+We create a function that runs `N_obs` observations for a single subject of a wiener process with parameters defined in the function call and that we will specify using the priors distributions. The output of the function is a dataframe with the output from the `rwiener` function and the values of the parameters used.
+
+```{r}
+prior_setting <- function(N_obs, drift_rate, boundary_separation, non_decision, bias){
+  wiener_df <- RWiener::rwiener(N_obs, boundary_separation, non_decision, bias, drift_rate)
+  subj_df <- cbind(
+    wiener_df,
+    tibble::tibble(
+      drift_rate = drift_rate,
+      boundary_separation = boundary_separation,
+      non_decision = non_decision,
+      bias = bias
+    )
+  )
+  return(subj_df)
+}
+```
+
+We can test the function by simulating 150 trials of a single subject and examine the outputs.
+
+```{r}
+head(
+  prior_setting(
+  150,
+  rcauchy(1, 0, 5),
+  rnorm(1, 1.5, 1),
+  rnorm(1, 0.2, 0.1),
+  rnorm(1, 0.5, 0.2)
+  )
+)
+```
+
+Before we advanced any further we need to acknowledge a limitation of the random sampling functions with the `rwiener` function. Certain values will give an error when passed onto the `rwiener` function. For example a negative non-decision time
+
+```{r}
+RWiener::rwiener(1, 
+                 1, 
+                 -0.3, #Neegative non-decision
+                 0.5, 
+                 0)
+```
+Since non-decision time prior mas modeled as a $Normal(0.2, 0.1)$. Thus there are approximately a `r pnorm(0, 0.2, 0.1)` probability of getting a negative value. That means that in average for each 100 subjects there will be `r round(pnorm(0, 0.2, 0.1) * 100)` that would give and error with the `rwiener` function. 
+
+Something similar happens with the boundary separation which becomes obvious once we see the density function for the prior distribution of the parameter $ Normal(1.5, 1)$
+
+
+```{r}
+plot(
+  seq(-5,5, 0.01),
+  dnorm(seq(-5,5, 0.01), 1.5, 1),
+  type = 'l')
+```
+
+There is a non-negligible portion of the area covering values below 0. If we try to run the wiener process with a negative boundary separation parameter we get an error.
+
+```{r}
+RWiener::rwiener(1, 0.1, 0.1, 0, 0)
+```
+In this case there is a `r pnorm(0, 1.5, 1)` probability of getting a negative value. Since the probability for the non-decision time is independent of the probability for the boundary separation the probability of the joint events is `r pnorm(0, 0.2, 0.1) * pnorm(0, 1.5, 1)`. Is low but could still happen and cause and error in the code. Thus before advancing we need to add a handling protocol for negative values in sensitive parameters. To do this we modify our `prior_setting` function to turn the bias value to 0 if it is negative. For the boundary separation parameter and the non-decision time parameter we check if any of the values is negative and sum this value to its absolute and add a very small quantity (0.001) to turn the number non-zero. 
+
+```{r}
+modified_prior_fun <- function(N_obs, drift_rate, boundary_separation, non_decision, bias){
+  
+  wiener_params <- list(
+    'n' = N_obs,
+    'alpha' = boundary_separation, 
+    'tau' = non_decision,
+    'beta' = bias,
+    'delta' = drift_rate
+  )
+  
+  wiener_params[c('alpha','tau')] <- lapply(wiener_params[c('alpha', 'tau')], 
+         function(x) ifelse(x <= 0, x + abs(x) + 0.001, x)
+        )
+  
+  wiener_params[['beta']] <- ifelse(
+    wiener_params[['beta']] < 0, 
+    0,
+    wiener_params[['beta']]
+    )
+         
+  
+  wiener_df <- do.call(RWiener::rwiener, wiener_params)
+  
+  subj_df <- cbind(
+    wiener_df,
+    tibble::as_tibble(
+      wiener_params[-1]
+    )
+  )
+  return(subj_df)
+}
+```
+
+We test the function by purposely supplying it negative values in sensitive parameters.
+
+```{r}
+modified_prior_fun(N_obs = 10, drift_rate = 1, boundary_separation = -1, non_decision = -1, bias = -1)
+```
+
+To get any number of subjects we only need to repeat the previous function with the same parameters for a number of times equal to the number of subjects. One way would be to loop over the function for a number proportional to the amount of subjects that we want to simulate. We run a quick test with 5 subjects and 150 trials.
+
+```{r}
+many_subjects <- function(N_subj, N_trials){
+  many_subject_df <- data.frame()
+  for(i in 1:N_subj){
+    temporary_df <- modified_prior_fun(
+        N_trials,
+        rcauchy(1, 0, 5),
+        rnorm(1, 1.5, 1),
+        rnorm(1, 0.2, 0.1),
+        rnorm(1, 0.5, 0.2)
+          )
+      temporary_df$id <- i
+      many_subject_df <- rbind(many_subject_df, temporary_df)
+  }
+  return(many_subject_df)
+}
+```
+
+We could also try creating the dataframe in advance and replace in each iteration the appropiate rows and columns. Our dataframe needs a number of rows equal to the number of subjects times the number of trials. Thus, for 10 subjects and 150 trials we need 1500 rows in our final dataframe. Then we create a for loop were in each iteration we replace the corresponding portion of the dataframe.
+
+```{r}
+long_df_fun <- function(N_subj, N_trials){
+  final_df <- data.frame(
+    id = rep(N_subj, each = N_trials),
+    q = vector('double', N_subj*N_trials),
+    resp = rep(NA, N_subj*N_trials),
+    drift_rate = vector('double', N_subj*N_trials),
+    boundary = vector('double', N_subj*N_trials),
+    non_decision = vector('double', N_subj*N_trials),
+    bias = vector('double', N_subj*N_trials)
+  )
+  
+  for(i in 1:n_subj){
+    #Define start and end row indices
+    star_ind <- (i * N_trials)-N_trials + 1
+    end_ind <- i*N_trials
+    
+    #Subject specific parameters
+    subj_params <- c(
+    'drift_rate' = rcauchy(1, 0, 5),
+    'boundary_separation' = rnorm(1, 1.5, 1),
+    'non-decision' = rnorm(1, 0.2, 0.1),
+    'bias' = rnorm(1, 0.5, 0.2)
+    )
+    
+    #Random Wiener process
+    subj_df <- RWiener::rwiener(
+    N_trials,
+    subj_params['boundary_separation'],
+    subj_params['non-decision'],
+    subj_params['bias'],
+    subj_params['drift_rate']
+    )
+    
+    #Update wiener process outputs
+    final_df[star_ind:end_ind, 'q'] = subj_df$q
+    final_df[star_ind:end_ind, 'resp'] = subj_df$resp
+    
+    #Update subject specific parameters 
+    final_df[star_ind:end_ind, 'drift_rate'] = rep(subj_params['drift_rate'], N_trials)
+    final_df[star_ind:end_ind, 'boundary'] = rep(subj_params['boundary_separation'], N_trials)
+    final_df[star_ind:end_ind, 'non_decision'] = rep(subj_params['non-decision'], N_trials)
+    final_df[star_ind:end_ind, 'non_decision'] = rep(subj_params['non-decision'], N_trials)
+    final_df[star_ind:end_ind, 'bias'] = rep(subj_params['bias'], N_trials)
+  }
+}
+```
+
+Yet another approach would be to create all the parameters for each subject in one call and use that as a named list with the parameters of the custom function we created `modified_prior_fun`. Then we pass that list to the `pmap` function to perform the `modified_prior_fun` with each parameter and then integrate the resulting list of dataframes into one.
+
+```{r}
+list_df_fun <- function(parameters_list){
+  result_list <- purrr::pmap(parameters_list, modified_prior_fun)
+  dplyr::bind_rows(result_list)
+}
+```
+
+### Problem with the RWiener package
+
+For some reason all the functions implemented with the `rwiener` function from the `RWiener` package sometimes enter and endless loop. For this reason we try out the rtdists version of the diffusion model.
+
+## rtdists version
+
+The `rtdists` package also has a function (`rdiffusion`) for generating random values from the drift-diffusion model and provides with much more arguments than the `rwiener` function.
+
+We could simply write an analogous function to the `modified_prior_fun` that instead uses the `rdiffusion` function but we can save all the trouble of fixing the random sampled values by taking advantage of the `rdiffusion` argument `stop_on_error` which throws a value of 0 for the reaction times when the process is called with parameters outside the allowed range. Thus we only need to code the steps necessary for adding the subject-specific parameters to the resulting dataframe.
+
+```{r}
+rtdists_drift_fun <- function(N_obs, drift_rate, boundary_separation, non_decision, bias,
+                              non_decision_variance = 0, bias_variance = 0, drift_rate_variance = 0,
+                              error_handling = TRUE){
+    diffusion_params <- list(
+    'n' = N_obs,
+    'a' = boundary_separation, 
+    't0' = non_decision,
+    'z' = bias,
+    'v' = drift_rate,
+    'stop_on_error' = !error_handling,
+    'st0' = non_decision_variance,
+    'sz' = bias_variance,
+    'sv' = drift_rate_variance
+  )
+  
+  diffusion_df <- do.call(rtdists::rdiffusion, diffusion_params)
+  
+  subj_df <- cbind(
+    diffusion_df,
+    tibble::as_tibble(
+      diffusion_params[-1]
+    )
+  )
+  return(subj_df)
+}
+```
+
+Since the last function implemented with the `rwiener` function was the most readable and more efficient we use a similar approach here avoiding testing other functions.
+
+
+```{r}
+list_df_fun <- function(parameters_list){
+  result_list <- purrr::pmap(parameters_list, rtdists_drift_fun)
+  dplyr::bind_rows(result_list)
+}
+```
+
+Finally we can test the performance of the function using the `rbenchmark` package, doing 50 replications of 25 subjects and 150 trials.
+
+```{r}
+library(rbenchmark)
+sujetos <- 25
+benchmark(
+  'rtdists_function' = list_df_fun(
+  list(
+      N_obs = 150, 
+      drift_rate = rcauchy(sujetos, 0, 5),
+      boundary_separation = rnorm(sujetos, 1.5, 1),
+      non_decision = rnorm(sujetos, 0.2, 0.1),
+      bias = rnorm(sujetos, 0.5, 0.2) 
+    )
+  ),
+  replications = 50,
+  columns = c("test", "replications", "elapsed",
+                      "relative", "user.self", "sys.self")
+)
+
+```
+
+The function performs well...
+
+
+[1] Wagenmakers, E.-J., Ratcliff, R., Gomez, P., & McKoon, G. (2008). A diffusion model account of criterion shifts in the lexical decision task. Journal of Memory and Language, 58(1), 140–159.
